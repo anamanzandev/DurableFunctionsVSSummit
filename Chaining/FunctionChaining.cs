@@ -1,10 +1,8 @@
-using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.DurableTask;
 using Microsoft.Azure.WebJobs.Extensions.Http;
-using Microsoft.Azure.WebJobs.Host;
 using Microsoft.Extensions.Logging;
 
 namespace VS.Summit
@@ -12,35 +10,54 @@ namespace VS.Summit
     public static class FunctionChaining
     {
         [FunctionName("FunctionChaining")]
-        public static async Task<List<string>> RunOrchestrator(
+        public static async Task<object> RunOrchestrator(
             [OrchestrationTrigger] IDurableOrchestrationContext context)
         {
-            var outputs = new List<string>();
+            int invoiceId = context.GetInput<int>();
 
-            // Replace "hello" with the name of your Durable Activity Function.
-            outputs.Add(await context.CallActivityAsync<string>("FunctionChaining_Hello", "Tokyo"));
-            outputs.Add(await context.CallActivityAsync<string>("FunctionChaining_Hello", "Seattle"));
-            outputs.Add(await context.CallActivityAsync<string>("FunctionChaining_Hello", "London"));
-
-            // returns ["Hello Tokyo!", "Hello Seattle!", "Hello London!"]
-            return outputs;
+            try
+            {
+                var paidInvoice = await context.CallActivityAsync<object>("ProcessPayment", invoiceId);
+                var taxReceipt = await context.CallActivityAsync<object>("GenerateTaxReceipt", paidInvoice);
+                return await context.CallActivityAsync<object>("SendTaxReceipt", taxReceipt);
+            }
+            catch (System.Exception)
+            {
+                // Tratamento de exceções
+                return null;
+            }
         }
 
-        [FunctionName("FunctionChaining_Hello")]
-        public static string SayHello([ActivityTrigger] string name, ILogger log)
+        [FunctionName("ProcessPayment")]
+        public static string ProcessPayment([ActivityTrigger] int invoiceId, ILogger log)
         {
-            log.LogInformation($"Saying hello to {name}.");
-            return $"Hello {name}!";
+            log.LogInformation($"Processing payment for invoice #{invoiceId}.");
+            return $"Payment processed for invoice #{invoiceId}!";
+        }
+
+        [FunctionName("GenerateTaxReceipt")]
+        public static string GenerateTaxReceipt([ActivityTrigger] string paidInvoice, ILogger log)
+        {
+            log.LogInformation($"Generating Tax Receipt -> {paidInvoice}");
+            return $"Tax Receipt generated! -> {paidInvoice}";
+        }
+
+        [FunctionName("SendTaxReceipt")]
+        public static string SendTaxReceipt([ActivityTrigger] string taxReceipt, ILogger log)
+        {
+            log.LogInformation($"Sending Tax Receipt -> {taxReceipt}");
+            return $"Tax Receipt sent! -> {taxReceipt}";
         }
 
         [FunctionName("FunctionChaining_HttpStart")]
         public static async Task<HttpResponseMessage> HttpStart(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post")] HttpRequestMessage req,
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "chaining/{invoiceId}")] HttpRequestMessage req,
             [DurableClient] IDurableOrchestrationClient starter,
+            int invoiceId,
             ILogger log)
         {
             // Function input comes from the request content.
-            string instanceId = await starter.StartNewAsync("FunctionChaining", null);
+            string instanceId = await starter.StartNewAsync("FunctionChaining", null, invoiceId);
 
             log.LogInformation($"Started orchestration with ID = '{instanceId}'.");
 
